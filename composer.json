@@ -1,0 +1,10 @@
+{
+  "name": "nlproduction/wp-support-access",
+  "description": "Administrator-issued temporary WordPress access with revocable magic login links.",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "require": {"php": ">=7.4", "ext-json": "*"},
+  "autoload": {"psr-4": {"NLProduction\\WordPress\\SupportAccess\\": "src/"}},
+  "scripts": {"test": "python3 tests/integration.py"},
+  "archive": {"exclude": ["/tests", "/.github", "/.gitignore"]}
+}

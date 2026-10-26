@@ -1,0 +1,34 @@
+name: Verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  wordpress:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.4']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mysqli
+          coverage: none
+          tools: composer:v2
+      - name: PHP syntax and Composer metadata
+        run: |
+          find src tests -name '*.php' -print0 | xargs -0 -n1 php -l
+          php -l wp-support-access.php
+          composer validate --strict
+      - name: Read-only WordPress core fixture
+        run: |
+          mkdir -p "$RUNNER_TEMP/wpsa-core"
+          curl --fail --silent --show-error --location https://wordpress.org/wordpress-6.8.3.tar.gz | tar -xz --strip-components=1 -C "$RUNNER_TEMP/wpsa-core"
+      - name: Real WordPress, MySQL, HTTP and multisite
+        env:
+          WPSA_WP_CORE: ${{ runner.temp }}/wpsa-core
+        run: python3 tests/integration.py
+      - name: Build and audit installable plugin ZIP
+        run: python3 tools/package.py

@@ -1,0 +1,9 @@
+WP Support Access
+Copyright (C) 2026 Northern Lights Production
+
+Adapted from MapSVG's WordPress support token, temporary account and magic-login
+functionality, distributed under the GNU General Public License v2 or later.
+This standalone package has no runtime dependency on MapSVG.
+
+WordPress is a trademark of the WordPress Foundation. This project is not
+affiliated with or endorsed by the WordPress Foundation.
