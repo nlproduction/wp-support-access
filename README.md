@@ -4,25 +4,11 @@ Grant temporary access to WordPress in one click. Share a magic link with your
 support team; clicking it opens wp-admin without entering a username or password.
 Revoke the grant to end the associated WordPress sessions immediately.
 
-A dependency-free PHP package with one main class, `SupportAccess`, and an
-optional ready-to-install WordPress plugin. Adapted from MapSVG's support-token
-and magic-login functionality; it runs independently of MapSVG.
-
-## Install as a WordPress plugin
-
-1. Download `wp-support-access.zip` from [Releases](https://github.com/nlproduction/wp-support-access/releases).
-2. In WordPress, open **Plugins → Add New → Upload Plugin**, upload the ZIP and activate it.
-3. Open **Settings → Support access** and click **Grant access & create magic link**.
-4. Copy the link and share it privately with your support team.
-
-The default lifetime is **24 hours**; the UI also offers one hour or seven days.
-Each grant has its own account. Links can be used repeatedly until they expire or
-are revoked, as needed for ongoing support. The original link is displayed only
-when created. The list shows creation, expiration and last-use timestamps and a
-**Revoke** button.
+A dependency-free PHP package for embedding in your own WordPress plugin.
+The main class is `SupportAccess`. Adapted from MapSVG's support-token and
+magic-login functionality; it runs independently of MapSVG.
 
 Requires WordPress 5.9+, PHP 7.4+ and the usual WordPress MySQL database.
-No Composer installation or frontend build is needed for the plugin ZIP.
 
 ## Embed in your own plugin
 
@@ -44,32 +30,30 @@ Then run `composer install`. In your plugin's main file:
 require_once __DIR__ . '/vendor/autoload.php';
 
 use NLProduction\WordPress\SupportAccess\SupportAccess;
-use NLProduction\WordPress\SupportAccess\AdminPage;
 
 $support = new SupportAccess();
 $support->register();
-
-// Optional: omit this when supplying your own UI.
-(new AdminPage($support))->register();
 
 register_activation_hook(__FILE__, [$support, 'initialize']);
 register_deactivation_hook(__FILE__, [$support, 'deactivate']);
 ```
 
+Register the service on **every request**, including public requests. This
+registers token storage initialization, the REST API, magic-login handling and
+session-expiry checks. Do not put registration inside `is_admin()`.
+
 For a network-activated host plugin, call `deactivate()` for every site on network
-deactivation, using `switch_to_blog()` / `restore_current_blog()`. The standalone
-plugin entry point already implements this in batches. Do not activate the
-standalone plugin alongside an embedded copy; register one owner of the service.
+deactivation, using `switch_to_blog()` / `restore_current_blog()`.
 
 Storage initializes on `init` for each site. Call the API after `init`, or call
 `install()` explicitly from an activation/migration hook. If your host plugin can
 be uninstalled without deactivation, its uninstall hook must also revoke grants.
 
-## PHP API
+## Get the magic link in PHP
 
-The following calls run inside a loaded WordPress installation. Management calls
-require the current user to have `manage_options`; temporary support accounts
-cannot create, list or revoke grants through this package.
+Call `issue()` from your plugin's nonce-protected administrator action. It
+creates the temporary support account and returns the **complete magic link in
+`$grant['url']`**. You do not need to assemble the URL or write a login handler.
 
 ```php
 $grant = $support->issue([
@@ -78,21 +62,104 @@ $grant = $support->issue([
 ]);
 
 if (is_wp_error($grant)) {
-    // Handle the error; do not log secrets from successful responses.
+    // Show/return the error in your plugin's admin UI.
+    $errorMessage = $grant->get_error_message();
     return;
 }
 
-$grant['id'];      // Stable grant ID for revocation.
-$grant['url'];     // Full magic link, returned only at creation.
-$grant['token'];   // Raw bearer token, returned only at creation.
+$magicLink = $grant['url']; // Share this URL with your support team.
+$grantId = $grant['id'];   // Keep this ID to revoke access later.
 
+// For example, display the link in your existing plugin's admin page:
+echo '<input type="text" readonly value="' . esc_attr($magicLink) . '">';
+```
+
+The result looks like
+`https://example.com/wp-login.php?action=wpsa_login&wpsa_token=…`.
+Opening it signs the support user into WordPress and redirects to wp-admin.
+
+**The raw URL is returned only when the grant is created.** Only a token hash is
+stored, so `grants()` cannot return the original link later. Display or return it
+to the administrator immediately. If it is lost, revoke the grant and issue a
+new one. Each call to `issue()` creates a new grant; do not call it automatically
+when your plugin bootstraps or its settings page loads.
+
+The default lifetime is **24 hours**. You can set an integer `ttl` between 60 and
+604800 seconds. The link is reusable until expiration or revocation.
+
+## Add a one-click button to your plugin
+
+The registered REST API already creates and returns magic links. Put this in
+your **existing plugin's admin-page renderer**. The button sends one authenticated
+request and displays the returned URL:
+
+```php
+<?php
+if (!$support->canManage()) {
+    return;
+}
+$supportRequest = [
+    'url' => rest_url('wp-support-access/v1/grants'),
+    'nonce' => wp_create_nonce('wp_rest'),
+];
+?>
+<button type="button" id="my-plugin-support-create">Create magic link</button>
+<input type="text" id="my-plugin-support-link" readonly hidden>
+<p id="my-plugin-support-status" role="status"></p>
+<script>
+(() => {
+    const config = <?php echo wp_json_encode($supportRequest, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+    const button = document.getElementById('my-plugin-support-create');
+    const link = document.getElementById('my-plugin-support-link');
+    const status = document.getElementById('my-plugin-support-status');
+
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        link.value = ''; link.hidden = true;
+        status.textContent = 'Creating access…';
+        try {
+            const response = await fetch(config.url, {
+                method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                headers: {'Content-Type': 'application/json', 'X-WP-Nonce': config.nonce},
+                body: JSON.stringify({label: 'Support', ttl: 86400})
+            });
+            const grant = await response.json();
+            if (!response.ok) throw new Error(grant.message || 'Could not create access.');
+
+            link.value = grant.url; // This is the complete magic link.
+            link.hidden = false;
+            link.focus(); link.select();
+            status.textContent = 'Copy and save this link now. It is shown only once.';
+            // grant.id can be passed to DELETE /grants/{id} to revoke access.
+        } catch (error) {
+            status.textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
+    });
+    window.addEventListener('pagehide', () => { link.value = ''; link.hidden = true; });
+})();
+</script>
+```
+
+The service checks administrator permissions on the server; WordPress verifies
+the cookie authentication and nonce. The URL from `rest_url()` also supports
+plain permalink installations. Register the service before rendering this page.
+
+## Other PHP operations
+
+These calls run inside a loaded WordPress installation. Management calls require
+the current user to have `manage_options`; temporary support accounts cannot
+create, list or revoke grants through this package.
+
+```php
 $support->grants(20, 0);       // Safe metadata, with limit and offset.
 $support->validate($token);    // Safe metadata or WP_Error; no login side effect.
-$support->revoke($grant['id']); // true or WP_Error; ends associated sessions.
+$support->revoke($grantId);    // true or WP_Error; ends associated sessions.
 ```
 
 `login($token)` validates the token, creates a WordPress session and sets its auth
-cookies; it must run before output. The plugin handles this automatically at
+cookies; it must run before output. `register()` handles this automatically at
 `wp-login.php?action=wpsa_login&wpsa_token=…`, then redirects to the site's wp-admin.
 The route does not need permalink rules or a rewrite flush. `wpsa_token` avoids
 WordPress's reserved `key` password-reset parameter.
@@ -190,15 +257,6 @@ hosting caches and third-party security plugins require separate verification.
 The same runner also creates a real two-site network and checks site-scoped
 tokens/sessions, support-user privileges, membership and content cleanup, and
 network-wide plugin deactivation.
-
-## Build a plugin ZIP
-
-```sh
-python3 tools/package.py
-```
-
-Creates `dist/wp-support-access.zip` with an explicit runtime file allowlist.
-Development files and tests are excluded.
 
 ## License
 
