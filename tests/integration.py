@@ -76,6 +76,9 @@ def main():
         (content / 'plugins').mkdir(parents=True)
         shutil.copytree(PACKAGE, content / 'plugins' / 'wp-support-access',
                         ignore=shutil.ignore_patterns('.git', 'vendor', 'dist', '__pycache__'))
+        host = content / 'plugins' / 'wpsa-test-host'
+        host.mkdir()
+        shutil.copy2(PACKAGE / 'tests' / 'host-plugin.php', host / 'wpsa-test-host.php')
         (content / 'mu-plugins').mkdir()
         theme = content / 'themes' / 'testtheme'
         theme.mkdir(parents=True)
@@ -236,6 +239,39 @@ def main():
             check(int(state['active']) == 0 and int(state['support_users']) == 0, 'Deactivation left active access/accounts')
             check(request(remaining, origin + '/wp-admin/')[0] == 302, 'Deactivated plugin leaves valid session')
             print('PASS expiry before cron, forged links, actual plugin deactivation and account/session cleanup', flush=True)
+            php('activate-host')
+            embedded = issue()
+            plugin_page = origin + '/wp-admin/admin.php?page=wpsa-host-settings'
+            for target, destination in [
+                ('admin.php?page=wpsa-host-settings', plugin_page),
+                (plugin_page, plugin_page),
+                ('admin.php?page=wpsa-host-settings&tab=support#details', plugin_page + '&tab=support#details'),
+            ]:
+                php('configure-host', json.dumps({'redirect_to': target}))
+                embedded_client, _ = client()
+                status, headers, _ = request(embedded_client, embedded['url'] + '&redirect_to=http://example.invalid/')
+                check(status == 302 and headers.get('Location') == destination,
+                      'Configured host settings redirect failed: ' + str(headers.get('Location')))
+                status, _, page = request(embedded_client, plugin_page)
+                check(status == 200 and 'Embedding host settings reached' in page, 'Real host settings page not reached after login')
+            for target in [
+                '', 'https://example.invalid/wp-admin/admin.php?page=bad',
+                '//example.invalid/wp-admin/admin.php', 'javascript:alert(1)',
+                '../wp-login.php', 'admin.php\r\nLocation:http://example.invalid/',
+                'admin.php\\evil', 'http://user:password@127.0.0.1/wp-admin/',
+                origin + '/wp-admin-evil/admin.php', origin + '/wp-admin/../wp-login.php',
+                origin + '/wp-admin/%2e%2e/wp-login.php', origin + '/wp-admin/%252e%252e/wp-login.php',
+                origin.replace('127.0.0.1', 'localhost') + '/wp-admin/admin.php',
+                'http://127.0.0.1:' + str(port + 1) + '/wp-admin/admin.php',
+                origin + '/wp-login.php', origin.replace('http:', 'https:') + '/wp-admin/admin.php',
+            ]:
+                php('configure-host', json.dumps({'redirect_to': target}))
+                embedded_client, _ = client()
+                status, headers, _ = request(embedded_client, embedded['url'])
+                check(status == 302 and headers.get('Location') == origin + '/wp-admin/',
+                      'Unsafe/invalid configured redirect accepted: ' + repr(target))
+            php('deactivate-host')
+            print('PASS real embedded host settings redirects, absolute/relative paths, query/hash, request tampering and unsafe-target fallback', flush=True)
             print(php('network-install').strip(), flush=True)
             config_path = wp / 'wp-config.php'
             network_config = "define('MULTISITE', true); define('SUBDOMAIN_INSTALL', false);\n"

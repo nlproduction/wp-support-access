@@ -42,6 +42,14 @@ function expect($condition, string $message): void
 if ($command === 'contracts') {
     wp_set_current_user(1);
     expect($service->canManage(), 'Site administrator must manage grants');
+    foreach ([[], true, 123] as $badRedirect) {
+        try {
+            new \NLProduction\WordPress\SupportAccess\SupportAccess(['redirect_to' => $badRedirect]);
+            throw new RuntimeException('Non-string redirect option accepted');
+        } catch (InvalidArgumentException $expected) {
+            // Configuration mistakes are reported before registering any hooks.
+        }
+    }
     $editor = wp_insert_user(['user_login' => 'testeditor', 'role' => 'editor', 'user_pass' => 'disposable-editor-password']);
     wp_set_current_user($editor);
     expect(is_wp_error($service->issue()), 'Editor cannot issue');
@@ -133,6 +141,21 @@ if ($command === 'sessions') {
 if ($command === 'deactivate') {
     deactivate_plugins('wp-support-access/wp-support-access.php');
     echo "deactivated\n";
+    exit;
+}
+if ($command === 'activate-host') {
+    $result = activate_plugin('wpsa-test-host/wpsa-test-host.php');
+    expect(!is_wp_error($result), 'Embedding host activation failed');
+    expect(!is_plugin_active('wp-support-access/wp-support-access.php'), 'Standalone plugin must be inactive in embedding proof');
+    exit;
+}
+if ($command === 'configure-host') {
+    $options = json_decode($argv[2], true, 512, JSON_THROW_ON_ERROR);
+    update_option('wpsa_test_redirect', $options);
+    exit;
+}
+if ($command === 'deactivate-host') {
+    deactivate_plugins('wpsa-test-host/wpsa-test-host.php');
     exit;
 }
 if ($command === 'state') {

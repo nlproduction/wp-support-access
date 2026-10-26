@@ -4,7 +4,7 @@
  * Plugin URI: https://github.com/nlproduction/wp-support-access
  * Update URI: https://github.com/nlproduction/wp-support-access
  * Description: One-click temporary WordPress administrator access with expiring, revocable magic links.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Requires at least: 5.9
  * Requires PHP: 7.4
  * Author: Northern Lights Production

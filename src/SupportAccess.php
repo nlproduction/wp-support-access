@@ -11,6 +11,19 @@ final class SupportAccess
     public const MAX_TTL = 604800;
 
     private $registered = false;
+    private $redirectTo;
+
+    /** @param array{redirect_to?: string} $options Destination within this site's wp-admin. */
+    public function __construct(array $options = [])
+    {
+        $redirectTo = $options['redirect_to'] ?? '';
+        if (!is_string($redirectTo)) {
+            throw new \InvalidArgumentException('redirect_to must be a string.');
+        }
+        // Resolve at login time: WordPress pluggables and the current site/HTTPS
+        // context may not be available yet while the host plugin is loading.
+        $this->redirectTo = $redirectTo;
+    }
 
     public function register(): void
     {
@@ -223,8 +236,41 @@ final class SupportAccess
             wp_die(esc_html($result->get_error_message()), 'Support access', ['response' => 403]);
         }
         // Redirect target is entirely server-owned; never reflect an incoming redirect URL.
-        wp_safe_redirect(admin_url());
+        wp_safe_redirect($this->redirectUrl());
         exit;
+    }
+
+    private function redirectUrl(): string
+    {
+        $fallback = admin_url();
+        $target = $this->redirectTo;
+        if ($target === '' || preg_match('/[\x00-\x20\x7f\\\\]/', $target)) {
+            return $fallback;
+        }
+        $parts = wp_parse_url($target);
+        if ($parts === false || isset($parts['user']) || isset($parts['pass'])) {
+            return $fallback;
+        }
+        if (!isset($parts['scheme']) && !isset($parts['host']) && $target[0] !== '/') {
+            $target = admin_url($target);
+            $parts = wp_parse_url($target);
+        }
+        $base = wp_parse_url($fallback);
+        if (!$parts || !isset($parts['scheme'], $parts['host'])
+            || strtolower($parts['scheme']) !== strtolower($base['scheme'])
+            || strtolower($parts['host']) !== strtolower($base['host'])
+            || ($parts['port'] ?? null) !== ($base['port'] ?? null)) {
+            return $fallback;
+        }
+        $path = rawurldecode($parts['path'] ?? '');
+        $adminPath = rawurldecode($base['path']);
+        // Check the directory boundary and decoded traversal before redirecting.
+        // Reject residual %-encoding so repeated decoding cannot change the path.
+        if (strpos($path, $adminPath) !== 0
+            || preg_match('~(?:^|/)\.{1,2}(?:/|$)|[\x00-\x20\x7f\\\\%]~', $path)) {
+            return $fallback;
+        }
+        return $target;
     }
 
     public function guardSession($userId)
